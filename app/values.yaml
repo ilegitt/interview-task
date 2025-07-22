@@ -1,0 +1,44 @@
+replicaCount: 1
+
+image:
+  repository: my-app
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+service:
+  type: ClusterIP
+  port: 80
+
+# Service Account for IRSA
+serviceAccount:
+  create: true
+  # The ARN of the IAM role for the service account is passed in by the CI/CD pipeline.
+  annotations: {}
+
+# Liveness and Readiness Probes
+probes:
+  liveness:
+    path: /healthz
+    initialDelaySeconds: 15
+    periodSeconds: 20
+  readiness:
+    path: /readyz
+    initialDelaySeconds: 5
+    periodSeconds: 10
+
+# Resource requests and limits
+resources:
+  limits:
+    cpu: 200m
+    memory: 128Mi
+  requests:
+    cpu: 100m
+    memory: 64Mi
+
+# Database connection details
+database:
+  secretArn: "" # Populated by the pipeline from Terraform output
+
+# Istio configuration
+istio:
+  dbHost: "" # The RDS endpoint, populated by the pipeline
