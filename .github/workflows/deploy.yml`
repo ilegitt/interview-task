@@ -1,0 +1,166 @@
+name: Build, Scan, and Deploy
+
+on:
+  push:
+    branches:
+      - main
+      - staging
+      - dev
+  pull_request:
+    branches:
+      - main
+      - staging
+
+jobs:
+  dependency_review:
+    name: "Scan PR Dependencies"
+    runs-on: ubuntu-latest
+    # This job only runs on Pull Requests
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Dependency Review (SCA)
+        # Scans dependency changes in a PR for known vulnerabilities.
+        # This acts as a security gate to prevent merging vulnerable code.
+        uses: actions/dependency-review-action@v3
+        with:
+          # Fails the build if any vulnerability with Critical or High severity is found.
+          fail-on-severity: 'high'
+          # You can also specify an allow-list for CVEs or packages if needed.
+          # allow-licenses: 'Apache-2.0, MIT'
+
+  build_and_scan:
+    name: "Build & Scan Container (SAST/SCA)"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        id: build-and-push
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/my-app:${{ github.sha }}
+
+      - name: Run Trivy vulnerability scanner (SAST & SCA)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ secrets.DOCKERHUB_USERNAME }}/my-app:${{ github.sha }}'
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          # 'os' scans operating system packages.
+          # 'library' scans application dependencies (SCA).
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+
+  deploy_infra_and_app:
+    name: "Deploy Infrastructure & Application"
+    runs-on: ubuntu-latest
+    needs: build_and_scan
+    # Only run on push events, not PRs
+    if: github.event_name == 'push'
+
+    environment: ${{ (github.ref == 'refs/heads/main' && 'production') || (github.ref == 'refs/heads/staging' && 'staging') || 'development' }}
+
+    permissions:
+      id-token: write # Required for OIDC
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: ${{ secrets.AWS_CI_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_wrapper: false
+      
+      - name: Terraform Init
+        id: init
+        run: terraform init
+        working-directory: ./terraform
+
+      - name: Terraform Plan
+        id: plan
+        run: |
+          terraform plan \
+            -var-file="env/${{ github.ref_name }}.tfvars" \
+            -var="eks_cluster_name=${{ vars.EKS_CLUSTER_NAME }}" \
+            -out=tfplan
+        working-directory: ./terraform
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve tfplan
+        working-directory: ./terraform
+
+      - name: Get Terraform Outputs
+        id: tf_outputs
+        run: |
+          echo "db_host=$(terraform -chdir=./terraform output -raw db_host_for_k8s)" >> $GITHUB_OUTPUT
+          echo "db_secret_arn=$(terraform -chdir=./terraform output -raw db_credentials_secret_arn)" >> $GITHUB_OUTPUT
+          echo "app_sa_role_arn=$(terraform -chdir=./terraform output -raw app_service_account_role_arn)" >> $GITHUB_OUTPUT
+
+      - name: Set up Kubeconfig
+        run: aws eks update-kubeconfig --name ${{ vars.EKS_CLUSTER_NAME }} --region ${{ vars.AWS_REGION }}
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'v3.10.1'
+          
+      - name: Deploy with Helm
+        run: |
+          helm upgrade --install my-app-${{ github.ref_name }} ./app \
+            --namespace my-app-${{ github.ref_name }} \
+            --create-namespace \
+            -f ./app/values.yaml \
+            -f ./app/values.${{ github.ref_name }}.yaml \
+            --set image.repository=${{ secrets.DOCKERHUB_USERNAME }}/my-app \
+            --set image.tag=${{ github.sha }} \
+            --set istio.dbHost=${{ steps.tf_outputs.outputs.db_host }} \
+            --set database.secretArn=${{ steps.tf_outputs.outputs.db_secret_arn }} \
+            --set serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn=${{ steps.tf_outputs.outputs.app_sa_role_arn }}
+
+  dast_scan:
+    name: DAST Scan with OWASP ZAP
+    runs-on: ubuntu-latest
+    needs: deploy_infra_and_app
+    # Only run on the staging environment
+    if: github.ref == 'refs/heads/staging'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: ZAP Scan
+        uses: zaproxy/action-baseline@v0.7.0
+        with:
+          # The target URL should be the public endpoint for your staging app
+          # This assumes you have an Ingress or Gateway exposing the service
+          target: 'http://my-app-staging.example.com'
+          rules_file_name: '.zap/rules.tsv'
+          cmd_options: '-a'
