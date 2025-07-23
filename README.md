@@ -38,15 +38,13 @@ aws eks create-addon \
 3. GitHub Repository Configuration
    
 You need to configure the following in your GitHub repository settings under Settings > Secrets and variables > Actions:
-	•	Secrets:
-	AWS_CI_ROLE_ARN: The ARN of the IAM role that the GitHub Actions pipeline will assume to deploy infrastructure. This role needs permissions to manage Terraform resources (RDS, IAM)    and interact with EKS. 
- 
+	Secrets:
+	AWS_CI_ROLE_ARN: The ARN of the IAM role that the GitHub Actions pipeline will assume to deploy infrastructure. This role needs permissions to manage Terraform resources 
+ 	(RDS, IAM) and interact with EKS. 
 	DOCKERHUB_USERNAME: Your Docker Hub username for pushing container images.
- 
 	DOCKERHUB_TOKEN: Your Docker Hub token.
  
-	•	Variables:
+	Variables:
 	AWS_REGION: The AWS region for deployment (e.g., us-east-1).
- 
 	EKS_CLUSTER_NAME: The name of your EKS cluster. 
 
