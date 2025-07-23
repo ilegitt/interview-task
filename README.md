@@ -45,4 +45,3 @@ You need to configure the following in your GitHub repository settings under Set
 	Variables:
 	AWS_REGION: The AWS region for deployment (e.g., us-east-1).
 	EKS_CLUSTER_NAME: The name of your EKS cluster. 
-
