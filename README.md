@@ -1,6 +1,6 @@
-Application and Database Deployment Pipeline This repository contains a fully automated CI/CD pipeline for deploying an application and a dedicated RDS database to a Kubernetes cluster on AWS. The solution uses Terraform for infrastructure provisioning, Helm for application packaging, and GitHub Actions for CI/CD orchestration, with a strong focus on security and automation. 
+This repository contains a fully automated CI/CD pipeline for deploying an application and a dedicated RDS database to a Kubernetes cluster on AWS. The solution uses Terraform for infrastructure provisioning, Helm for application packaging, and GitHub Actions for CI/CD orchestration, with a strong focus on security and automation. 
 
-Key Features
+KEY FEATURES
 
 Automated Infrastructure: Terraform provisions the AWS RDS instance, security groups, and the necessary IAM roles for zero-trust authentication.
 
@@ -12,13 +12,11 @@ Zero-Trust Security: Authentication between all components is handled through sh
 
 DevSecOps Integration: The pipeline includes automated security scanning: 
 SAST/SCA: Trivy scans container images for known vulnerabilities (CVEs) in both OS packages and application libraries. 
-
 DAST: OWASP ZAP scans the running application in staging for common web vulnerabilities. 
-
 Dependency Review: Proactively scans pull requests to prevent vulnerable dependencies from being merged. 
 
 Prerequisites
-Before using this pipeline, you must ensure the following are configured in your AWS account and EKS cluster. 
+Before using this pipeline, you must ensure the following are configured in AWS account and EKS cluster. 
 
 1. EKS Cluster with OIDC Provider 
 
