@@ -2,28 +2,31 @@ provider "aws" {
   region = var.aws_region
 }
 
-# Data sources for existing VPC, subnets, and EKS cluster OIDC
-data "aws_vpc" "existing" {
+# Data source for the Database VPC where the RDS instance will be deployed
+data "aws_vpc" "db_vpc" {
   filter {
     name   = "tag:Name"
-    values = [var.vpc_name]
+    values = [var.db_vpc_name]
   }
 }
 
-data "aws_subnets" "private" {
+# Data source for the private subnets within the Database VPC
+data "aws_subnets" "db_private_subnets" {
   filter {
     name   = "vpc-id"
-    values = [data.aws_vpc.existing.id]
+    values = [data.aws_vpc.db_vpc.id]
   }
   tags = {
     Tier = "Private"
   }
 }
 
+# Data source for the EKS cluster to get its OIDC provider URL
 data "aws_eks_cluster" "cluster" {
   name = var.eks_cluster_name
 }
 
+# IAM policy document to allow the K8s service account to assume a role
 data "aws_iam_policy_document" "app_k8s_assume_role_policy" {
   statement {
     actions = ["sts:AssumeRoleWithWebIdentity"]
@@ -37,8 +40,6 @@ data "aws_iam_policy_document" "app_k8s_assume_role_policy" {
     condition {
       test     = "StringEquals"
       variable = "${replace(data.aws_eks_cluster.cluster.identity[0].oidc[0].issuer, "https://", "")}:sub"
-      # This now correctly and predictably matches the namespace and service account name created by Helm.
-      # e.g., system:serviceaccount:my-app-dev:my-app-dev
       values   = ["system:serviceaccount:${var.app_name}-${var.environment}:${var.app_name}-${var.environment}"]
     }
   }
@@ -57,9 +58,9 @@ module "rds_db" {
   # Pass variables to the module
   environment          = var.environment
   app_name             = var.app_name
-  vpc_id               = data.aws_vpc.existing.id
-  private_subnet_ids   = data.aws_subnets.private.ids
-  k8s_vpc_cidr         = var.k8s_vpc_cidr
+  db_vpc_id            = data.aws_vpc.db_vpc.id
+  db_private_subnet_ids= data.aws_subnets.db_private_subnets.ids
+  k8s_vpc_cidr         = var.k8s_vpc_cidr # From the peered EKS VPC
   db_allocated_storage = var.db_allocated_storage
   db_instance_class    = var.db_instance_class
   db_username          = var.db_username
