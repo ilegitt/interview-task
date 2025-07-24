@@ -13,13 +13,13 @@ variable "app_name" {
   type        = string
 }
 
-variable "vpc_name" {
-  description = "The name tag of the existing VPC."
+variable "db_vpc_name" {
+  description = "The name tag of the existing VPC for the database."
   type        = string
 }
 
 variable "k8s_vpc_cidr" {
-  description = "The CIDR block of the Kubernetes cluster's VPC."
+  description = "The CIDR block of the Kubernetes cluster's VPC (the peered VPC)."
   type        = string
 }
 
