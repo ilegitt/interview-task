@@ -8,18 +8,18 @@ variable "app_name" {
   type        = string
 }
 
-variable "vpc_id" {
+variable "db_vpc_id" {
   description = "The ID of the VPC to deploy the RDS instance into."
   type        = string
 }
 
-variable "private_subnet_ids" {
+variable "db_private_subnet_ids" {
   description = "A list of private subnet IDs for the DB subnet group."
   type        = list(string)
 }
 
 variable "k8s_vpc_cidr" {
-  description = "The CIDR block of the Kubernetes cluster's VPC."
+  description = "The CIDR block of the peered Kubernetes cluster's VPC."
   type        = string
 }
 
