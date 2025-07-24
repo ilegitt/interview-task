@@ -5,18 +5,19 @@ resource "random_password" "db_password" {
   override_special = "!#$%&*()-_=+[]{}<>:?"
 }
 
-# Create a security group for the RDS instance
+# Create a security group for the RDS instance within the DB VPC
 resource "aws_security_group" "db_sg" {
   name        = "${var.app_name}-${var.environment}-db-sg"
-  description = "Allow traffic to the RDS instance"
-  vpc_id      = var.vpc_id
+  description = "Allow traffic to the RDS instance from the peered K8s VPC"
+  vpc_id      = var.db_vpc_id
 
+  # Ingress rule to allow traffic from the K8s cluster VPC CIDR
   ingress {
     from_port   = 5432 # PostgreSQL port
     to_port     = 5432
     protocol    = "tcp"
     cidr_blocks = [var.k8s_vpc_cidr]
-    description = "Allow inbound from K8s VPC"
+    description = "Allow inbound from peered K8s VPC"
   }
 
   egress {
@@ -32,10 +33,10 @@ resource "aws_security_group" "db_sg" {
   }
 }
 
-# Create a DB subnet group
+# Create a DB subnet group using the private subnets from the DB VPC
 resource "aws_db_subnet_group" "db_subnet_group" {
   name       = "${var.app_name}-${var.environment}-sng"
-  subnet_ids = var.private_subnet_ids
+  subnet_ids = var.db_private_subnet_ids
 
   tags = {
     Name        = "${var.app_name}-${var.environment}-sng"
