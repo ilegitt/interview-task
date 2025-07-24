@@ -14,12 +14,10 @@ Secure Credentials Management: The pipeline uses AWS Secrets Manager and the AWS
 
 Zero-Trust Security: Authentication between all components is handled through short-lived tokens and IAM roles (OIDC and IRSA), with no long-lived keys. 
 
-DevSecOps Integration: The pipeline includes automated security scanning: 
-SAST/SCA: Trivy scans container images for known vulnerabilities (CVEs) in both OS packages and application libraries. 
-DAST: OWASP ZAP scans the running application in staging for common web vulnerabilities. 
-Dependency Review: Proactively scans pull requests to prevent vulnerable dependencies from being merged. 
+DevSecOps Integration: The pipeline includes automated security scanning (SCA, SAST, DAST).
 
-Prerequisites
+PREREQUISITES
+
 Before using this pipeline, you must ensure the following are configured in AWS account and EKS cluster. 
 
 1. EKS Cluster and Peered VPCs
@@ -29,7 +27,6 @@ A VPC Peering Connection must be active between these two VPCs, with route table
 
 2. EKS Cluster with OIDC Provider
 You must have an IAM OIDC provider associated with your EKS cluster.
-
 
 3. AWS Secrets and Configuration Provider (ASCP)
 The ASCP EKS add-on must be installed on your cluster. This component is responsible for fetching secrets from AWS Secrets Manager.
