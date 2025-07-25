@@ -17,7 +17,7 @@ on:
 
 # A workflow run is made up of one or more jobs, which run in parallel by default.
 jobs:
-# This job runs first on pull requests to provide a security gate.
+  # This job runs first on pull requests to provide a security gate.
   dependency_review:
     name: "Scan PR Dependencies"
     runs-on: ubuntu-latest
@@ -51,18 +51,21 @@ jobs:
 
       - name: Login to Docker Hub
         # Securely logs into the container registry using secrets.
+        # This step only runs on 'push' events, as we only push the image then.
+        if: github.event_name == 'push'
         uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push Docker image
-        # Builds the Dockerfile from the context of the repository and pushes it to Docker Hub.
+        # Builds the Dockerfile from the context of the repository.
+        # It only pushes the image on 'push' events to avoid cluttering the registry on PRs.
         # The image is tagged with the unique Git SHA for traceability.
         uses: docker/build-push-action@v4
         with:
           context: .
-          push: true
+          push: (github.event_name == 'push')
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/my-app:${{ github.sha }}
 
       - name: Run Trivy vulnerability scanner (SAST & SCA)
@@ -96,17 +99,18 @@ jobs:
       - name: Run Helm Lint
         run: helm lint ./app
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v2
-
-      - name: Terraform Init (for validation)
-        run: terraform init -backend=false
-        working-directory: ./terraform
-
-      - name: Run tflint
+      - name: Setup tflint
         uses: terraform-linters/setup-tflint@v3
         with:
           tflint_version: v0.50.0
+
+      - name: Init tflint
+        run: tflint --init
+        working-directory: ./terraform
+
+      - name: Run tflint
+        run: tflint --recursive
+        working-directory: ./terraform
 
       - name: Run tfsec
         uses: aquasecurity/tfsec-action@v1.0.0
@@ -138,6 +142,11 @@ jobs:
           role-to-assume: ${{ secrets.AWS_CI_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_wrapper: false
+
       - name: Terraform Init
         # Initializes Terraform, configuring the S3 remote backend dynamically.
         # This allows the same code to be used for different environments by storing state in separate keys.
@@ -168,9 +177,10 @@ jobs:
         # Captures the outputs from the Terraform run (like ARNs and hostnames) to be used in later steps.
         id: tf_outputs
         run: |
-          echo "db_host=$(terraform -chdir=./terraform output -raw db_host_for_k8s)" >> $GITHUB_OUTPUT
-          echo "db_secret_arn=$(terraform -chdir=./terraform output -raw db_credentials_secret_arn)" >> $GITHUB_OUTPUT
-          echo "app_sa_role_arn=$(terraform -chdir=./terraform output -raw app_service_account_role_arn)" >> $GITHUB_OUTPUT
+          echo "db_host=$(terraform output -raw db_host_for_k8s)" >> $GITHUB_OUTPUT
+          echo "db_secret_arn=$(terraform output -raw db_credentials_secret_arn)" >> $GITHUB_OUTPUT
+          echo "app_sa_role_arn=$(terraform output -raw app_service_account_role_arn)" >> $GITHUB_OUTPUT
+        working-directory: ./terraform
 
       - name: Set up Kubeconfig
         # Configures kubectl to communicate with the specified EKS cluster.
