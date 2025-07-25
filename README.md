@@ -12,7 +12,9 @@ VPC Peering Model: The application runs in an EKS cluster in one VPC, while the 
 
 Remote State Management: The Terraform state is securely stored in an S3 bucket with state locking via a DynamoDB table, enabling collaboration and safe CI/CD execution.
 
-Secure Credentials Management: The pipeline uses AWS Secrets Manager and the AWS Secrets and Configuration Provider (ASCP) to securely inject database credentials into the application at runtime. 
+Secure Credentials Management: The pipeline uses AWS Secrets Manager and the AWS Secrets and Configuration Provider (ASCP) to securely inject database credentials into the application at runtime.
+
+Code Quality Gates: The pipeline includes static analysis steps to lint and scan Terraform and Helm code for best practices and security issues before deployment.
 
 Zero-Trust Security: Authentication between all components is handled through short-lived tokens and IAM roles (OIDC and IRSA), with no long-lived keys. 
 
