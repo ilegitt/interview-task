@@ -1,7 +1,6 @@
 # The display name of the entire workflow.
 name: Build, Scan, and Deploy
 
-# --- Workflow Triggers ---
 # This section defines when the workflow will run.
 on:
   # Triggers on pushes to the main, staging, or dev branches.
@@ -16,11 +15,9 @@ on:
       - main
       - staging
 
-# --- Jobs ---
 # A workflow run is made up of one or more jobs, which run in parallel by default.
 jobs:
-  # --- Job 1: Dependency Review (SCA) ---
-  # This job runs first on pull requests to provide a security gate.
+# This job runs first on pull requests to provide a security gate.
   dependency_review:
     name: "Scan PR Dependencies"
     runs-on: ubuntu-latest
@@ -40,7 +37,6 @@ jobs:
           # Fails the build if any vulnerability with Critical or High severity is found.
           fail-on-severity: 'high'
 
-  # --- Job 2: Build and Scan Container (SAST/SCA) ---
   # This job builds the application's Docker image and scans it for vulnerabilities.
   build_and_scan:
     name: "Build & Scan Container (SAST/SCA)"
@@ -84,13 +80,45 @@ jobs:
           # Only fails for vulnerabilities of CRITICAL or HIGH severity.
           severity: 'CRITICAL,HIGH'
 
-  # --- Job 3: Deploy Infrastructure and Application ---
+  # This job scans the Terraform and Helm code for issues.
+  iac_scan:
+    name: "IaC & Helm Static Analysis"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'v3.10.1'
+
+      - name: Run Helm Lint
+        run: helm lint ./app
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+
+      - name: Terraform Init (for validation)
+        run: terraform init -backend=false
+        working-directory: ./terraform
+
+      - name: Run tflint
+        uses: terraform-linters/setup-tflint@v3
+        with:
+          tflint_version: v0.50.0
+
+      - name: Run tfsec
+        uses: aquasecurity/tfsec-action@v1.0.0
+        with:
+          working_directory: ./terraform
+
   # This job handles the Terraform and Helm deployment.
   deploy_infra_and_app:
     name: "Deploy Infrastructure & Application"
     runs-on: ubuntu-latest
-    # This job depends on the successful completion of the 'build_and_scan' job.
-    needs: build_and_scan
+    # This job depends on the successful completion of both the build and IaC scan jobs.
+    needs: [build_and_scan, iac_scan]
     # This 'if' condition ensures this job only runs on 'push' events, not pull requests.
     if: github.event_name == 'push'
     # Selects the GitHub Environment based on the branch name for secrets and protection rules.
@@ -109,11 +137,6 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_CI_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v2
-        with:
-          terraform_wrapper: false
 
       - name: Terraform Init
         # Initializes Terraform, configuring the S3 remote backend dynamically.
@@ -153,11 +176,6 @@ jobs:
         # Configures kubectl to communicate with the specified EKS cluster.
         run: aws eks update-kubeconfig --name ${{ vars.EKS_CLUSTER_NAME }} --region ${{ vars.AWS_REGION }}
 
-      - name: Set up Helm
-        uses: azure/setup-helm@v3
-        with:
-          version: 'v3.10.1'
-      
       - name: Deploy with Helm
         # Deploys the application using Helm. 'upgrade --install' ensures it works for both initial and subsequent deployments.
         # It dynamically sets values in the Helm chart using the image tag from the build step and outputs from Terraform.
@@ -173,7 +191,6 @@ jobs:
             --set database.secretArn=${{ steps.tf_outputs.outputs.db_secret_arn }} \
             --set serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn=${{ steps.tf_outputs.outputs.app_sa_role_arn }}
 
-  # --- Job 4: Dynamic Security Scan (DAST) ---
   # This job runs a DAST scan against the deployed application.
   dast_scan:
     name: DAST Scan with OWASP ZAP
