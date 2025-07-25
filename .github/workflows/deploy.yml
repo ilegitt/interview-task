@@ -1,58 +1,68 @@
+# The display name of the entire workflow.
 name: Build, Scan, and Deploy
 
+# --- Workflow Triggers ---
+# This section defines when the workflow will run.
 on:
+  # Triggers on pushes to the main, staging, or dev branches.
   push:
     branches:
       - main
       - staging
       - dev
+  # Also triggers on pull requests targeting the main or staging branches.
   pull_request:
     branches:
       - main
       - staging
 
+# --- Jobs ---
+# A workflow run is made up of one or more jobs, which run in parallel by default.
 jobs:
+  # --- Job 1: Dependency Review (SCA) ---
+  # This job runs first on pull requests to provide a security gate.
   dependency_review:
     name: "Scan PR Dependencies"
     runs-on: ubuntu-latest
-    # This job only runs on Pull Requests
+    # This 'if' condition ensures the job only runs for pull_request events.
     if: github.event_name == 'pull_request'
+    # Permissions required for this job. 'contents: read' is needed to check out the code.
     permissions:
       contents: read
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
 
       - name: Dependency Review (SCA)
-        # Scans dependency changes in a PR for known vulnerabilities.
-        # This acts as a security gate to prevent merging vulnerable code.
+        # This action scans dependency changes in the PR for known vulnerabilities.
         uses: actions/dependency-review-action@v3
         with:
           # Fails the build if any vulnerability with Critical or High severity is found.
           fail-on-severity: 'high'
-          # You can also specify an allow-list for CVEs or packages if needed.
-          # allow-licenses: 'Apache-2.0, MIT'
 
+  # --- Job 2: Build and Scan Container (SAST/SCA) ---
+  # This job builds the application's Docker image and scans it for vulnerabilities.
   build_and_scan:
     name: "Build & Scan Container (SAST/SCA)"
     runs-on: ubuntu-latest
+    # Permissions required for this job. 'packages: write' is needed if pushing to GitHub Packages.
     permissions:
       contents: read
       packages: write
-
     steps:
       - name: Checkout
         uses: actions/checkout@v3
 
       - name: Login to Docker Hub
+        # Securely logs into the container registry using secrets.
         uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push Docker image
-        id: build-and-push
+        # Builds the Dockerfile from the context of the repository and pushes it to Docker Hub.
+        # The image is tagged with the unique Git SHA for traceability.
         uses: docker/build-push-action@v4
         with:
           context: .
@@ -60,35 +70,41 @@ jobs:
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/my-app:${{ github.sha }}
 
       - name: Run Trivy vulnerability scanner (SAST & SCA)
+        # Scans the newly built image for vulnerabilities.
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: '${{ secrets.DOCKERHUB_USERNAME }}/my-app:${{ github.sha }}'
           format: 'table'
+          # Fails the pipeline if vulnerabilities are found.
           exit-code: '1'
+          # Ignores vulnerabilities that do not have a fix available yet.
           ignore-unfixed: true
-          # 'os' scans operating system packages.
-          # 'library' scans application dependencies (SCA).
+          # Scans both OS packages and application-level libraries (e.g., npm, pip).
           vuln-type: 'os,library'
+          # Only fails for vulnerabilities of CRITICAL or HIGH severity.
           severity: 'CRITICAL,HIGH'
 
+  # --- Job 3: Deploy Infrastructure and Application ---
+  # This job handles the Terraform and Helm deployment.
   deploy_infra_and_app:
     name: "Deploy Infrastructure & Application"
     runs-on: ubuntu-latest
+    # This job depends on the successful completion of the 'build_and_scan' job.
     needs: build_and_scan
-    # Only run on push events, not PRs
+    # This 'if' condition ensures this job only runs on 'push' events, not pull requests.
     if: github.event_name == 'push'
-
+    # Selects the GitHub Environment based on the branch name for secrets and protection rules.
     environment: ${{ (github.ref == 'refs/heads/main' && 'production') || (github.ref == 'refs/heads/staging' && 'staging') || 'development' }}
-
+    # Permissions required for this job. 'id-token: write' is essential for OIDC authentication with AWS.
     permissions:
-      id-token: write # Required for OIDC
+      id-token: write
       contents: read
-
     steps:
       - name: Checkout
         uses: actions/checkout@v3
 
       - name: Configure AWS Credentials
+        # Uses OIDC to securely authenticate with AWS by assuming an IAM role. No static keys needed.
         uses: aws-actions/configure-aws-credentials@v2
         with:
           role-to-assume: ${{ secrets.AWS_CI_ROLE_ARN }}
@@ -98,14 +114,21 @@ jobs:
         uses: hashicorp/setup-terraform@v2
         with:
           terraform_wrapper: false
-      
+
       - name: Terraform Init
-        id: init
-        run: terraform init
+        # Initializes Terraform, configuring the S3 remote backend dynamically.
+        # This allows the same code to be used for different environments by storing state in separate keys.
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="key=my-app/${{ github.ref_name }}/terraform.tfstate" \
+            -backend-config="region=${{ vars.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ vars.TF_STATE_DYNAMODB_TABLE }}"
         working-directory: ./terraform
 
       - name: Terraform Plan
-        id: plan
+        # Creates an execution plan. The plan is saved to a file to ensure that what's planned is what's applied.
+        # It uses environment-specific .tfvars files and passes the EKS cluster name as a variable.
         run: |
           terraform plan \
             -var-file="env/${{ github.ref_name }}.tfvars" \
@@ -114,10 +137,12 @@ jobs:
         working-directory: ./terraform
 
       - name: Terraform Apply
+        # Applies the changes defined in the execution plan.
         run: terraform apply -auto-approve tfplan
         working-directory: ./terraform
 
       - name: Get Terraform Outputs
+        # Captures the outputs from the Terraform run (like ARNs and hostnames) to be used in later steps.
         id: tf_outputs
         run: |
           echo "db_host=$(terraform -chdir=./terraform output -raw db_host_for_k8s)" >> $GITHUB_OUTPUT
@@ -125,14 +150,17 @@ jobs:
           echo "app_sa_role_arn=$(terraform -chdir=./terraform output -raw app_service_account_role_arn)" >> $GITHUB_OUTPUT
 
       - name: Set up Kubeconfig
+        # Configures kubectl to communicate with the specified EKS cluster.
         run: aws eks update-kubeconfig --name ${{ vars.EKS_CLUSTER_NAME }} --region ${{ vars.AWS_REGION }}
 
       - name: Set up Helm
         uses: azure/setup-helm@v3
         with:
           version: 'v3.10.1'
-          
+      
       - name: Deploy with Helm
+        # Deploys the application using Helm. 'upgrade --install' ensures it works for both initial and subsequent deployments.
+        # It dynamically sets values in the Helm chart using the image tag from the build step and outputs from Terraform.
         run: |
           helm upgrade --install my-app-${{ github.ref_name }} ./app \
             --namespace my-app-${{ github.ref_name }} \
@@ -145,22 +173,24 @@ jobs:
             --set database.secretArn=${{ steps.tf_outputs.outputs.db_secret_arn }} \
             --set serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn=${{ steps.tf_outputs.outputs.app_sa_role_arn }}
 
+  # --- Job 4: Dynamic Security Scan (DAST) ---
+  # This job runs a DAST scan against the deployed application.
   dast_scan:
     name: DAST Scan with OWASP ZAP
     runs-on: ubuntu-latest
+    # This job depends on the successful completion of the 'deploy_infra_and_app' job.
     needs: deploy_infra_and_app
-    # Only run on the staging environment
+    # This 'if' condition ensures the job only runs for the 'staging' environment.
     if: github.ref == 'refs/heads/staging'
-
     steps:
       - name: Checkout
         uses: actions/checkout@v3
 
       - name: ZAP Scan
+        # Runs the OWASP ZAP baseline scan against the application's public endpoint.
         uses: zaproxy/action-baseline@v0.7.0
         with:
-          # The target URL should be the public endpoint for your staging app
-          # This assumes you have an Ingress or Gateway exposing the service
+          # This URL must be the public endpoint for your staging application.
           target: 'http://my-app-staging.example.com'
           rules_file_name: '.zap/rules.tsv'
           cmd_options: '-a'
