@@ -1,135 +1,84 @@
+1. Introduction
+   
+1.1. Purpose
+This document provides the complete technical and operational documentation for the automated CI/CD pipeline. The solution is designed to deploy an application and its dedicated database to a secure, multi-VPC environment on AWS, managed entirely through code and automation.
 
-This document provides a comprehensive overview of the automated CI/CD pipeline designed to deploy an application and its dedicated database to an AWS EKS cluster.
+1.2. Scope
+The scope of this solution covers the entire lifecycle of an application deployment, from a developer's code commit to a fully operational and scanned application running in a Kubernetes environment. This includes infrastructure provisioning, application packaging, security scanning, and deployment orchestration across multiple environments (development, staging, production).
 
-The solution is built on a foundation of Infrastructure as Code (IaC), GitOps principles, and an integrated DevSecOps toolchain to ensure secure, reliable, and repeatable deployments across multiple environments.
+2. Solution Architecture
+The architecture is designed for security, scalability, and separation of concerns, utilizing a peered VPC model. It integrates best-in-class tools for cloud infrastructure, container orchestration, and CI/CD automation.
 
-The primary goal is to automate the entire lifecycle, from code commit to a fully operational and scanned application in a Kubernetes environment, with zero manual intervention and a robust zero-trust security posture.
+2.1. Core Components
+Source Control & CI/CD: GitHub and GitHub Actions for code management and workflow orchestration.
 
-- Core Components
-  
-Source Control & CI/CD: GitHub and GitHub Actions serve as the source code repository and the automation engine for the entire pipeline.
+Infrastructure as Code: Terraform for provisioning all AWS resources. The state is managed remotely in an S3 bucket with DynamoDB for state locking.
 
-Infrastructure as Code: Terraform is used to provision and manage all cloud infrastructure resources, including the database, networking rules, and IAM roles.
+Application Packaging: Helm for packaging and deploying Kubernetes manifests.
 
-Application Packaging: Helm packages the Kubernetes application manifests, allowing for versioned, repeatable, and configurable deployments.
+Cloud Infrastructure: AWS provides the EKS cluster, RDS database, and all supporting services.
 
-Cloud Provider: Amazon Web Services (AWS) hosts the EKS cluster and all supporting infrastructure.
+Networking: The application resides in an EKS VPC, while the database is isolated in a separate Database VPC. An existing VPC Peering Connection enables secure communication between them.
 
-Container Registry: Docker Hub (or any OCI-compliant registry) stores the application's container images.
+3. CI/CD Workflow
+The pipeline is event-driven, triggered by actions within the GitHub repository. It is composed of several independent jobs that run in a coordinated sequence to build, test, and deploy the application.
 
-- Workflow Overview
-  
-The pipeline follows a Git-centric workflow, where actions in the repository trigger specific automated processes:
+3.1. Job Descriptions
+dependency_review (On Pull Request): Scans for vulnerabilities in changed dependencies to prevent merging insecure code.
 
-Pull Request: A developer opens a pull request. This automatically triggers a Dependency Review scan to check for known vulnerabilities in any new or changed dependencies.
+iac_scan (On Push & PR): Performs static analysis on the infrastructure and Helm code using tflint, tfsec, and helm lint to catch misconfigurations and security issues early.
 
-Push to Branch: A commit is pushed to a feature branch (dev), staging, or main.
+build_and_scan (On Push & PR): Builds the application's Docker image and performs SAST/SCA scanning with Trivy. The image is only pushed to the registry on a push event.
 
-Build & Scan:
+deploy_infra_and_app (On Push): Depends on the success of the scan jobs. It deploys the infrastructure with Terraform and the application with Helm, passing necessary outputs from Terraform to the Helm chart.
 
-A new container image is built and pushed to the container registry.
+dast_scan (On Push to Staging): After a successful deployment to the staging environment, it runs a DAST scan against the live application using OWASP ZAP.
 
-Trivy performs Static Application Security Testing (SAST) and Software Composition Analysis (SCA) on the image, scanning for vulnerabilities in OS packages and application libraries.
+4. Security & DevSecOps Strategy
+The solution is built on a zero-trust model with security integrated at every stage.
 
-Deploy Infrastructure:
+4.1. Authentication: A Zero-Trust Model
+Pipeline to AWS: GitHub Actions authenticates to AWS using OIDC. It assumes an IAM role via a short-lived token, eliminating the need for static access keys.
 
-The pipeline authenticates to AWS using a secure, short-lived OIDC token.
+Pod to AWS: The application authenticates using IAM Roles for Service Accounts (IRSA). The pod's service account is annotated with an IAM role ARN, allowing it to securely fetch secrets from AWS Secrets Manager without any embedded credentials.
 
-Terraform runs to create or update the infrastructure for the target environment (e.g., RDS database, IAM Role for Service Account).
+4.2. Secrets Management Lifecycle
+Generation: Terraform creates a random, high-entropy password for the RDS database during provisioning.
 
-Deploy Application:
+Storage: The complete database credentials are stored as a secret in AWS Secrets Manager.
 
-Helm deploys the application to the corresponding namespace in the EKS cluster (e.g., my-app-dev). It injects configuration values from Terraform outputs, such as the database 
-secret ARN and the IAM role for the pod.
+Access Control: The application's IRSA role is granted a least-privilege policy that only allows it to read this specific secret.
 
-Dynamic Scan (Staging):
+Consumption: At runtime, the AWS Secrets and Configuration Provider (ASCP) mounts the secret as files into the pod's filesystem. The application reads credentials from these files, ensuring they are never exposed as environment variables or baked into the container image.
 
-After a successful deployment to the staging environment, an OWASP ZAP scan performs Dynamic Application Security Testing (DAST) against the running application to find runtime 
-vulnerabilities.
+4.3. Integrated Security Scanning (SCA, SAST, DAST)
+The pipeline includes a comprehensive, automated security scanning toolchain to identify vulnerabilities early and often.
 
-- Terraform Infrastructure
-The infrastructure is managed via a modular and environment-aware Terraform configuration.
+Software Composition Analysis (SCA): The dependency_review job scans pull requests for known vulnerabilities in open-source libraries. Additionally, the trivy scan in the build job re-validates application dependencies within the final container image.
 
-Structure: A root configuration (terraform/main.tf) calls a reusable rds module. This promotes code reuse and separation of concerns.
+Static Application Security Testing (SAST): The Trivy scan also inspects the container image's operating system and configuration for known CVEs, acting as a SAST tool for the infrastructure layer of the image. The iac_scan job provides SAST for the Terraform and Helm code itself.
 
-Provisioned Resources:
+Dynamic Application Security Testing (DAST): The OWASP ZAP scan runs against the deployed application in the staging environment. This "outside-in" scan actively probes the application for runtime vulnerabilities such as Cross-Site Scripting (XSS), SQL Injection, and insecure configurations.
 
-AWS RDS Instance: A PostgreSQL database instance is created within a specified private subnet in the dedicated Database VPC.
+5. Operational Guide
+5.1. Prerequisites
+A one-time setup is required for the target AWS account and EKS cluster:
 
-AWS Security Group: A security group is configured to only allow inbound traffic from the CIDR block of the peered EKS VPC, ensuring secure and isolated communication.
+Terraform State Backend: An S3 bucket and DynamoDB table must be created to store the Terraform state remotely and securely.
 
-AWS Secrets Manager Secret: A secret is created to securely store the randomly generated database credentials (username, password, host, etc.).
+VPC Peering: An active VPC Peering Connection must exist between the EKS VPC and the Database VPC, with correctly configured route tables.
 
-IAM Role for Service Account (IRSA): Terraform automatically creates the IAM role that the application's Kubernetes service account will assume. This role has a trust relationship with the EKS OIDC provider and is granted the specific permission to read the database secret from Secrets Manager. This entirely automates the IRSA setup.
+EKS IAM OIDC Provider: The EKS cluster must have an associated IAM OIDC provider.
 
-Environments: Configuration for each environment (dev, staging, prod) is defined in .tfvars files. The pipeline selects the appropriate file based on the active git branch.
+ASCP Add-on: The aws-secrets-store-csi-driver EKS add-on must be installed and active.
 
-- Helm Chart
-  
-The application is packaged as a Helm chart located in the app/ directory.
+GitHub Configuration: The required secrets (AWS_CI_ROLE_ARN, DOCKERHUB_USERNAME, DOCKERHUB_TOKEN) and variables (AWS_REGION, EKS_CLUSTER_NAME, TF_STATE_BUCKET, TF_STATE_DYNAMODB_TABLE) must be configured in the repository settings.
 
-Templates:
+5.2. Deployment Process
+The pipeline is entirely driven by git operations:
 
-deployment.yaml: Defines the Kubernetes Deployment. It includes liveness and readiness probes for health checking and specifies resource requests and limits to ensure stable cluster operation. It also defines the volume mount for the secrets.
+Deploy to Development: Push or merge a commit to the dev branch.
 
-service.yaml: Creates a ClusterIP service to expose the application within the cluster.
+Deploy to Staging: Push or merge a commit to the staging branch.
 
-serviceaccount.yaml: Creates a dedicated Kubernetes Service Account for the application in its namespace. The pipeline annotates this service account with the ARN of the IAM role created by Terraform.
-
-secretproviderclass.yaml: This crucial resource instructs the AWS Secrets and Configuration Provider (ASCP) which secret to fetch from AWS Secrets Manager and how to mount it into the pod.
-
-serviceentry.yaml: An Istio resource that explicitly allows egress traffic from the service mesh to the external RDS database endpoint, satisfying the REGISTRY_ONLY outbound traffic policy.
-
-Configuration: The values.yaml file provides default configurations, which are overridden by the pipeline at deploy time with environment-specific values from Terraform outputs.
-
-- Security Strategy
-The solution is built on a zero-trust model and integrates security scanning throughout the pipeline (DevSecOps).
-
-- Authentication and Authorization
-Pipeline to AWS: The GitHub Actions workflow authenticates to AWS using OpenID Connect (OIDC). This allows it to assume an IAM role (AWS_CI_ROLE_ARN) using short-lived tokens, completely avoiding the need for static, long-lived AWS access keys.
-
-Pod to AWS: The application pod authenticates to AWS using IAM Roles for Service Accounts (IRSA). The ASCP driver running on the pod uses the annotated service account to assume the IAM role created by Terraform, which grants it permission to call secretsmanager:GetSecretValue.
-
-- Secrets Management
-  
-Database credentials follow a secure, automated lifecycle:
-
-Creation: Terraform generates a random password for the RDS instance.
-
-Storage: The full connection details (host, port, user, password) are stored as a JSON object in AWS Secrets Manager.
-
-Access: The application's IAM role is granted read-only access only to this specific secret.
-
-Consumption: At runtime, the ASCP mounts the secret as files into the pod's filesystem (/mnt/secrets-store). The application reads the credentials directly from these files. 
-Credentials are never exposed as environment variables or in the container image.
-
-- Integrated Security Scanning
-Dependency Review (SCA): Prevents vulnerable dependencies from being merged into key branches by scanning pull requests.
-
-Container Image Scan (SAST/SCA): Trivy provides a critical security gate after the build step, failing the pipeline if high-severity vulnerabilities are found in the OS or application libraries.
-
-Dynamic Analysis (DAST): The OWASP ZAP scan provides an additional layer of security by testing the running application for vulnerabilities like XSS and SQLi in a production-like environment.
-
-- Operational Guide
-
-Prerequisites
-
-Before the first run, the target AWS account and EKS cluster require a one-time setup as detailed in the README.md:
-
-The EKS cluster must have an IAM OIDC provider associated with it.
-
-The aws-secrets-store-csi-driver EKS add-on must be installed.
-
-The required secrets and variables must be configured in the GitHub repository settings.
-
-- Deployment Workflow
-  
-The pipeline is driven by git operations;
-
-To scan a change: Open a pull request against staging or main. The dependency_review job will run.
-
-To deploy to Development: Push or merge a commit to the dev branch.
-
-To deploy to Staging: Push or merge a commit to the staging branch. This will also trigger a DAST scan after deployment.
-
-To deploy to Production: Push or merge a commit to the main branch.
+Deploy to Production: Push or merge a commit to the main branch.
