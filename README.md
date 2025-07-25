@@ -10,6 +10,8 @@ Automated Deployments: Helm packages the application, and GitHub Actions deploys
 
 VPC Peering Model: The application runs in an EKS cluster in one VPC, while the database resides in another. Communication is enabled via an existing VPC peering connection.
 
+Remote State Management: The Terraform state is securely stored in an S3 bucket with state locking via a DynamoDB table, enabling collaboration and safe CI/CD execution.
+
 Secure Credentials Management: The pipeline uses AWS Secrets Manager and the AWS Secrets and Configuration Provider (ASCP) to securely inject database credentials into the application at runtime. 
 
 Zero-Trust Security: Authentication between all components is handled through short-lived tokens and IAM roles (OIDC and IRSA), with no long-lived keys. 
@@ -47,3 +49,7 @@ Variables:
 AWS_REGION: The AWS region for deployment.
 
 EKS_CLUSTER_NAME: The name of your EKS cluster.
+
+TF_STATE_BUCKET: The name of the S3 bucket you created for the Terraform state.
+
+TF_STATE_DYNAMODB_TABLE: The name of the DynamoDB table you created for state locking.
